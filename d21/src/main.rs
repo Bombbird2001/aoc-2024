@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::{Read, Result};
 
+const INTERMEDIATE_ROBOTS: usize = 25;
+
 fn main() -> Result<()> {
     let mut file = File::open("input.txt")?;
     let mut contents = String::new();
@@ -14,16 +16,40 @@ fn main() -> Result<()> {
             ('1', (0, 2)), ('2', (1, 2)), ('3', (2, 2)),
             ('0', (1, 3)), ('A', (2, 3))
         ]);
+    let number_key_index_mapping = HashMap::from(
+        [
+            ('7', 0), ('8', 1), ('9', 2), ('4', 3), ('5', 4), ('6', 5), ('1', 6), ('2', 7), ('3', 8), ('0', 9), ('A', 10)
+        ]);
 
     let dir_keypad_positions = HashMap::from(
         [
             ('^', (1i32, 0i32)), ('>', (2, 1)), ('v', (1, 1)), ('<', (0, 1)), ('A', (2, 0))
         ]);
+    let dir_key_index_mapping = HashMap::from(
+        [
+            ('^', 0), ('>', 1), ('v', 2), ('<', 3), ('A', 4)
+        ]);
+
+    let presses = compute_presses(&dir_keypad_positions, &dir_key_index_mapping, INTERMEDIATE_ROBOTS, &number_keypad_positions, &number_key_index_mapping);
 
     let codes = contents.lines().map(|line| line).collect::<Vec<&str>>();
-    let complexity = codes.iter().fold(0, |acc, code|
-        acc + get_complexity(code, &number_keypad_positions, &dir_keypad_positions)
-    );
+    let complexity = codes.iter().fold(0, |acc, code| {
+        // acc + get_complexity(code, &number_keypad_positions, &dir_keypad_positions)
+        let num_portion = &code[0..code.chars().count() - 1].parse::<u64>().unwrap();
+        let mut sum = 0;
+        for i in 0..code.chars().count() - 1 {
+            let from_key = code.chars().nth(i).unwrap();
+            let to_key = code.chars().nth(i + 1).unwrap();
+
+            if i == 0 {
+                sum += presses[*number_key_index_mapping.get(&'A').unwrap()][*number_key_index_mapping.get(&from_key).unwrap()];
+            }
+
+            sum += presses[*number_key_index_mapping.get(&from_key).unwrap()][*number_key_index_mapping.get(&to_key).unwrap()];
+        }
+
+        acc + sum * num_portion
+    });
 
     println!("Total complexity: {}", complexity);
 
@@ -126,4 +152,123 @@ fn get_next_hand_position(curr_hand_pos: char, dir_keypad_pressed: char, keypad_
     };
 
     keypad_positions.iter().find(|(_, &pos)| pos == (new_x, new_y)).and_then(|(k, _)| Some(*k))
+}
+
+fn compute_presses(dir_keypad: &HashMap<char, (i32, i32)>, dir_index_mapping: &HashMap<char, usize>, max_depth: usize,
+                   number_keypad: &HashMap<char, (i32, i32)>, number_index_mapping: &HashMap<char, usize>) -> Vec<Vec<u64>> {
+    // presses[robots_before][from_key][to_key]
+    let mut dir_presses = vec![vec![vec![0u64; dir_keypad.len()]; dir_keypad.len()]; max_depth];
+
+    for before_robots in 0..max_depth {
+        dir_index_mapping.iter().for_each(|(from_key, &from_index)| {
+            dir_index_mapping.iter().for_each(|(to_key, &to_index)| {
+                if from_key == to_key {
+                    dir_presses[before_robots][from_index][to_index] = 0;
+                } else {
+                    let (from_x, from_y) = dir_keypad.get(from_key).unwrap();
+                    let (to_x, to_y) = dir_keypad.get(to_key).unwrap();
+                    if before_robots == 0 {
+                        let distance = ((from_x - to_x).abs() + (from_y - to_y).abs()) as u64;
+                        dir_presses[before_robots][from_index][to_index] = distance;
+                    } else {
+                        let horiz_key = if from_x > to_x { '<' } else { '>' };
+                        let vert_key = if from_y > to_y { '^' } else { 'v' };
+
+                        let mut min_dist = None;
+
+                        // First traverse x, then y
+                        let turning_point = dir_keypad.iter().find(|(_, &(x, y))| x == *to_x && y == *from_y);
+                        if turning_point.is_some() {
+                            let dist = if to_x == from_x {
+                                // Calculate A to vertical key, vertical key to A
+                                dir_presses[before_robots - 1][*dir_index_mapping.get(&'A').unwrap()][*dir_index_mapping.get(&vert_key).unwrap()] + (to_y - from_y).abs() as u64
+                                    + dir_presses[before_robots - 1][*dir_index_mapping.get(&vert_key).unwrap()][*dir_index_mapping.get(&'A').unwrap()]
+                            } else {
+                                // Calculate A to horizontal key, horizontal key to vertical key, vertical key to A
+                                dir_presses[before_robots - 1][*dir_index_mapping.get(&'A').unwrap()][*dir_index_mapping.get(&horiz_key).unwrap()] + (to_x - from_x).abs() as u64
+                                    + dir_presses[before_robots - 1][*dir_index_mapping.get(&horiz_key).unwrap()][*dir_index_mapping.get(&vert_key).unwrap()] + (to_y - from_y).abs() as u64
+                                    + dir_presses[before_robots - 1][*dir_index_mapping.get(&vert_key).unwrap()][*dir_index_mapping.get(&'A').unwrap()]
+                            };
+                            min_dist = Some(dist);
+                        }
+
+                        // Then traverse y, then x
+                        let turning_point = dir_keypad.iter().find(|(_, &(x, y))| x == *from_x && y == *to_y);
+                        if turning_point.is_some() {
+                            let dist = if to_y == from_y {
+                                // Calculate A to horizontal key, horizontal key to A
+                                dir_presses[before_robots - 1][*dir_index_mapping.get(&'A').unwrap()][*dir_index_mapping.get(&horiz_key).unwrap()] + (to_x - from_x).abs() as u64
+                                    + dir_presses[before_robots - 1][*dir_index_mapping.get(&horiz_key).unwrap()][*dir_index_mapping.get(&'A').unwrap()]
+                            } else {
+                                // Calculate A to vertical key, vertical key to horizontal key, horizontal key to A
+                                dir_presses[before_robots - 1][*dir_index_mapping.get(&'A').unwrap()][*dir_index_mapping.get(&vert_key).unwrap()] + (to_y - from_y).abs() as u64
+                                    + dir_presses[before_robots - 1][*dir_index_mapping.get(&vert_key).unwrap()][*dir_index_mapping.get(&horiz_key).unwrap()] + (to_x - from_x).abs() as u64
+                                    + dir_presses[before_robots - 1][*dir_index_mapping.get(&horiz_key).unwrap()][*dir_index_mapping.get(&'A').unwrap()]
+                            };
+                            if min_dist.is_none() || dist < min_dist.unwrap() {
+                                min_dist = Some(dist);
+                            }
+                        }
+
+                        dir_presses[before_robots][from_index][to_index] = min_dist.unwrap();
+                    }
+                }
+            });
+        });
+    }
+
+    let mut number_presses = vec![vec![0u64; number_keypad.len()]; number_keypad.len()];
+    number_index_mapping.iter().for_each(|(from_key, &from_index)| {
+        number_index_mapping.iter().for_each(|(to_key, &to_index)| {
+            if from_key == to_key {
+                number_presses[from_index][to_index] = 0;
+            } else {
+                let (from_x, from_y) = number_keypad.get(from_key).unwrap();
+                let (to_x, to_y) = number_keypad.get(to_key).unwrap();
+
+                let horiz_key = if from_x > to_x { '<' } else { '>' };
+                let vert_key = if from_y > to_y { '^' } else { 'v' };
+
+                let mut min_dist = None;
+
+                // First traverse x, then y
+                let turning_point = number_keypad.iter().find(|(_, &(x, y))| x == *to_x && y == *from_y);
+                if turning_point.is_some() {
+                    let dist = if to_x == from_x {
+                        // Calculate A to vertical key, vertical key to A
+                        dir_presses[max_depth - 1][*dir_index_mapping.get(&'A').unwrap()][*dir_index_mapping.get(&vert_key).unwrap()] + (to_y - from_y).abs() as u64
+                            + dir_presses[max_depth - 1][*dir_index_mapping.get(&vert_key).unwrap()][*dir_index_mapping.get(&'A').unwrap()] + 1
+                    } else {
+                        // Calculate A to horizontal key, horizontal key to vertical key, vertical key to A
+                        dir_presses[max_depth - 1][*dir_index_mapping.get(&'A').unwrap()][*dir_index_mapping.get(&horiz_key).unwrap()] + (to_x - from_x).abs() as u64
+                            + dir_presses[max_depth - 1][*dir_index_mapping.get(&horiz_key).unwrap()][*dir_index_mapping.get(&vert_key).unwrap()] + (to_y - from_y).abs() as u64
+                            + dir_presses[max_depth - 1][*dir_index_mapping.get(&vert_key).unwrap()][*dir_index_mapping.get(&'A').unwrap()] + 1
+                    };
+                    min_dist = Some(dist);
+                }
+
+                // Then traverse y, then x
+                let turning_point = number_keypad.iter().find(|(_, &(x, y))| x == *from_x && y == *to_y);
+                if turning_point.is_some() {
+                    let dist = if to_y == from_y {
+                        // Calculate A to horizontal key, horizontal key to A
+                        dir_presses[max_depth - 1][*dir_index_mapping.get(&'A').unwrap()][*dir_index_mapping.get(&horiz_key).unwrap()] + (to_x - from_x).abs() as u64
+                            + dir_presses[max_depth - 1][*dir_index_mapping.get(&horiz_key).unwrap()][*dir_index_mapping.get(&'A').unwrap()] + 1
+                    } else {
+                        // Calculate A to vertical key, vertical key to horizontal key, horizontal key to A
+                        dir_presses[max_depth - 1][*dir_index_mapping.get(&'A').unwrap()][*dir_index_mapping.get(&vert_key).unwrap()] + (to_y - from_y).abs() as u64
+                            + dir_presses[max_depth - 1][*dir_index_mapping.get(&vert_key).unwrap()][*dir_index_mapping.get(&horiz_key).unwrap()] + (to_x - from_x).abs() as u64
+                            + dir_presses[max_depth - 1][*dir_index_mapping.get(&horiz_key).unwrap()][*dir_index_mapping.get(&'A').unwrap()] + 1
+                    };
+                    if min_dist.is_none() || dist < min_dist.unwrap() {
+                        min_dist = Some(dist);
+                    }
+                }
+
+                number_presses[from_index][to_index] = min_dist.unwrap();
+            }
+        });
+    });
+
+    number_presses
 }
